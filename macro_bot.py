@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import sounddevice as sd
+from tkinter import messagebox
 import pyautogui
 import tkinter as tk
 from tkinter import filedialog
@@ -27,13 +28,14 @@ pyautogui.FAILSAFE = True
 
 
 def choose_audio_device():
+    """Prompt the user to select an output device for loopback capture."""
     devices = sd.query_devices()
     for idx, dev in enumerate(devices):
-        if dev['max_input_channels'] > 0:
+        if dev['max_output_channels'] > 0:
             print(f"{idx}: {dev['name']}")
     while True:
         try:
-            sel = int(input("Select audio input device index: "))
+            sel = int(input("Select audio output device index: "))
             if 0 <= sel < len(devices):
                 settings.device = sel
                 break
@@ -54,11 +56,14 @@ def load_sound_cue(path: str):
     settings.sound_path = path
 
 
-def listen_for_sound(stop_event: threading.Event):
-    """Listen to the microphone and wait for the configured sound cue."""
+def listen_for_sound(stop_event: threading.Event) -> bool:
+    """Listen to desktop audio and wait for the configured sound cue.
+
+    Returns True if the cue was detected.
+    """
     if cue_audio is None:
         print("No sound cue loaded.")
-        return
+        return False
 
     q: queue.Queue[np.ndarray] = queue.Queue()
     buffer = np.array([], dtype=np.float32)
@@ -68,7 +73,7 @@ def listen_for_sound(stop_event: threading.Event):
             print(status)
         q.put(indata[:, 0].copy())
 
-    with sd.InputStream(device=settings.device, channels=1, samplerate=cue_rate, callback=callback):
+    with sd.InputStream(device=settings.device, channels=1, samplerate=cue_rate, callback=callback, loopback=True):
         while not stop_event.is_set():
             data = q.get()
             buffer = np.concatenate((buffer, data))
@@ -79,8 +84,10 @@ def listen_for_sound(stop_event: threading.Event):
                 similarity = (corr / norm) * settings.threshold_multiplier
                 if similarity >= settings.similarity_threshold:
                     print("Detected sound cue")
-                    return
+                    return True
                 buffer = buffer[-len(cue_audio):]
+
+    return False
 
 
 def perform_actions():
@@ -111,7 +118,7 @@ class MacroBotGUI:
 
         tk.Label(self.root, text="Audio Device").pack()
         devices = sd.query_devices()
-        self.input_devices = [(i, d['name']) for i, d in enumerate(devices) if d['max_input_channels'] > 0]
+        self.input_devices = [(i, d['name']) for i, d in enumerate(devices) if d['max_output_channels'] > 0]
         device_names = [name for _, name in self.input_devices]
         self.device_var = tk.StringVar(value=device_names[0] if device_names else "")
         tk.OptionMenu(self.root, self.device_var, *device_names).pack(fill="x")
@@ -123,6 +130,9 @@ class MacroBotGUI:
         self.start_button = tk.Button(self.root, text="Start", command=self.start)
         self.start_button.pack(fill="x")
         tk.Button(self.root, text="Stop", command=self.stop).pack(fill="x")
+
+        self.status_var = tk.StringVar(value="")
+        tk.Label(self.root, textvariable=self.status_var, fg="green").pack(fill="x")
 
         self.stop_event = threading.Event()
         self.listener_thread: threading.Thread | None = None
@@ -144,17 +154,23 @@ class MacroBotGUI:
         if cue_audio is None:
             print("Please select a sound cue before starting.")
             return
+        self.status_var.set("")
         self.stop_event.clear()
         self.listener_thread = threading.Thread(target=self.run_listener)
         self.listener_thread.start()
 
     def run_listener(self) -> None:
         while not self.stop_event.is_set():
-            listen_for_sound(self.stop_event)
+            detected = listen_for_sound(self.stop_event)
+            if detected:
+                self.root.after(0, lambda: self.status_var.set("Detected sound cue"))
+                self.root.after(0, lambda: messagebox.showinfo("Macro Bot", "Detected sound cue"))
+            
             if self.stop_event.is_set():
                 break
             time.sleep(settings.failsafe_timer)
-            perform_actions()
+            if detected:
+                perform_actions()
 
     def stop(self) -> None:
         self.stop_event.set()
