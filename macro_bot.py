@@ -78,6 +78,7 @@ def listen_for_sound(stop_event: threading.Event):
                 norm = np.linalg.norm(segment) * np.linalg.norm(cue_audio)
                 similarity = (corr / norm) * settings.threshold_multiplier
                 if similarity >= settings.similarity_threshold:
+                    print("Detected sound cue")
                     return
                 buffer = buffer[-len(cue_audio):]
 
