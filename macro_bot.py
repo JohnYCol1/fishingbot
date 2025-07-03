@@ -73,7 +73,17 @@ def listen_for_sound(stop_event: threading.Event) -> bool:
             print(status)
         q.put(indata[:, 0].copy())
 
-    with sd.InputStream(device=settings.device, channels=1, samplerate=cue_rate, callback=callback, loopback=True):
+    extra = None
+    if hasattr(sd, "WasapiSettings"):
+        extra = sd.WasapiSettings(loopback=True)
+
+    with sd.InputStream(
+        device=settings.device,
+        channels=1,
+        samplerate=cue_rate,
+        callback=callback,
+        extra_settings=extra,
+    ):
         while not stop_event.is_set():
             data = q.get()
             buffer = np.concatenate((buffer, data))
